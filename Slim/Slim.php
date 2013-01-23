@@ -112,6 +112,11 @@ class Slim
     protected $notFound;
 
     /**
+     * @var mixed Callable to be invoked if the given HTTP method is not allowable
+     */
+    protected $methodNotAllowed;
+
+    /**
      * @var array
      */
     protected $hooks = array(
@@ -555,6 +560,49 @@ class Slim
     }
 
     /**
+     * Method Not Allowed Handler
+     *
+     * This method defines or invokes the application-wide Method Not Allowed handler.
+     * There are two contexts in which this method may be invoked:
+     *
+     * 1. When declaring the handler:
+     *
+     * If the $argument parameter is callable, this
+     * method will register the callable to be invoked when an uncaught
+     * Exception is detected, or when otherwise explicitly invoked.
+     * The handler WILL NOT be invoked in this context.
+     *
+     * 2. When invoking the handler:
+     *
+     * If the $argument parameter is not callable, Slim assumes you want
+     * to invoke an already-registered handler. If the handler has been
+     * registered and is callable, it is invoked and passed the caught Exception
+     * as its one and only argument. The handler's output is captured
+     * into an output buffer and sent as the body of a 405 HTTP Response.
+     *
+     * @param  mixed $argument Callable|\Exception
+     */
+    public function methodNotAllowed($argument = null)
+    {
+        if (is_callable($argument)) {
+            //Register handler
+            $this->methodNotAllowed = $argument;
+        } else {
+            //Invoke handler
+			$this->router()->getMatchedRoutes(true);
+
+			$currentRoute = $this->router()->current();
+			$httpMethodsAllowed = empty($currentRoute) ? array() : $currentRoute->getHttpMethods();
+			$this->response['Allow'] = implode(' ', $httpMethodsAllowed);
+
+            $this->response->status(405);
+            $this->response->body('');
+            $this->response->write($this->callMethodNotAllowedHandler($argument));
+            $this->stop();
+        }
+    }
+
+    /**
      * Call error handler
      *
      * This will invoke the custom or default error handler
@@ -570,6 +618,27 @@ class Slim
             call_user_func_array($this->error, array($argument));
         } else {
             call_user_func_array(array($this, 'defaultError'), array($argument));
+        }
+
+        return ob_get_clean();
+    }
+
+	/**
+     * Call method not allowed handler
+     *
+     * This will invoke the custom or default error handler
+     * and RETURN its output.
+     *
+     * @return string
+     */
+    protected function callMethodNotAllowedHandler()
+    {
+        ob_start();
+        $customHandler = $this->methodNotAllowed;
+        if (is_callable($customHandler)) {
+            call_user_func_array($customHandler, array());
+        } else {
+            call_user_func_array(array($this, 'defaultMethodNotAllowed'), array());
         }
 
         return ob_get_clean();
@@ -1215,21 +1284,30 @@ class Slim
             ob_start();
             $this->applyHook('slim.before.router');
             $dispatched = false;
+            $httpMethodsAllowed = array();
             $matchedRoutes = $this->router->getMatchedRoutes($this->request->getMethod(), $this->request->getResourceUri());
             foreach ($matchedRoutes as $route) {
-                try {
-                    $this->applyHook('slim.before.dispatch');
-                    $dispatched = $this->router->dispatch($route);
-                    $this->applyHook('slim.after.dispatch');
-                    if ($dispatched) {
-                        break;
+                if ($route->supportsHttpMethod($this->environment['REQUEST_METHOD'])) {
+                    try {
+                        $this->applyHook('slim.before.dispatch');
+                        $dispatched = $this->router->dispatch($route);
+                        $this->applyHook('slim.after.dispatch');
+                        if ($dispatched) {
+                            break;
+                        }
+                    } catch (\Slim\Exception\Pass $e) {
+                        continue;
                     }
-                } catch (\Slim\Exception\Pass $e) {
-                    continue;
+                } else {
+                    $httpMethodsAllowed = array_merge($httpMethodsAllowed, $route->getHttpMethods());
                 }
             }
             if (!$dispatched) {
-               $this->notFound();
+				if ($httpMethodsAllowed) {
+                    $this->methodNotAllowed();
+                } else {
+                   $this->notFound();
+                }
             }
             $this->applyHook('slim.after.router');
             $this->stop();
@@ -1304,6 +1382,14 @@ class Slim
     protected function defaultError($e)
     {
         $this->getLog()->error($e);
-        echo self::generateTemplateMarkup('Error', '<p>A website error has occured. The website administrator has been notified of the issue. Sorry for the temporary inconvenience.</p>');
+        echo static::generateTemplateMarkup('Error', '<p>A website error has occurred. The website administrator has been notified of the issue. Sorry for the temporary inconvenience.</p>');
+    }
+
+    /**
+     * Default Error handler
+     */
+    protected function defaultMethodNotAllowed()
+    {
+        echo self::generateTemplateMarkup('405 Method Not Allowed', '<p>A website error has occurred because the given HTTP method was not allowed by this route. The website administrator has been notified of the issue. Sorry for the temporary inconvenience.</p>');
     }
 }
