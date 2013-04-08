@@ -1,5 +1,5 @@
 {
-    "name": "dannykopping/slim",
+    "name": "dannykopping/slim-custom",
     "type": "library",
     "description": "Slim Framework, a PHP micro framework",
     "keywords": ["microframework","rest","router"],
